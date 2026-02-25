@@ -1,31 +1,63 @@
+import os
 import asyncio
 from random import randint
 
-from decouple import Config, Csv
 from contextlib import suppress
+from dotenv import load_dotenv
 from telethon import TelegramClient, events, types
 
-env = Config('.env')
+load_dotenv('.env')
 
-API_ID = env("API_ID", cast=int)
-API_HASH = env("API_HASH", cast=str)
-KEYWORDS = env("KEYWORDS", cast=Csv(str))
-SOURCE_GROUPS = env("SOURCE_GROUPS", cast=Csv(int))
-DEST_GROUP_ID = env("DEST_GROUP_ID", cast=int)
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
+KEYWORDS = os.getenv("KEYWORDS").split(',')
+DEST_GROUP_ID = int(os.getenv("DEST_GROUP_ID"))
 
 client = TelegramClient("session", API_ID, API_HASH)
 
-async def main():
-    await client.start()
-    await client.run_until_disconnected()
+SOURCE_GROUP_IDS = set()
 
-@client.on(events.NewMessage(chats=SOURCE_GROUPS))
+
+async def build_archived_groups(client: TelegramClient):
+    ids = set()
+    async for d in client.iter_dialogs(folder=1):
+        if d.is_group:
+            ids.add(d.entity.id)
+    return ids
+
+
 async def handler(event: types.UpdateNewChannelMessage):
     text = event.message.message.lower() if event.message.message else ""
 
     if any(keyword in text for keyword in KEYWORDS):
         await asyncio.sleep(randint(1, 5))
-        await event.message.forward_to(DEST_GROUP_ID)
+        await forward_message(event.message)
+        return
+
+    media = event.message.media
+    if media and hasattr(media, 'document'):
+        document = media.document
+        if document and document.mime_type.startswith('audio/'):
+            await asyncio.sleep(randint(1, 5))
+            await forward_message(event.message)
+
+
+async def forward_message(message):
+    try :
+        await message.forward_to(DEST_GROUP_ID)
+    except:
+        pass
+
+async def main():
+    await client.start()
+
+    global SOURCE_GROUP_IDS
+    SOURCE_GROUP_IDS = await build_archived_groups(client)
+
+    client.add_event_handler(handler, events.NewMessage(chats=SOURCE_GROUP_IDS))
+
+    await client.run_until_disconnected()
+
 
 if __name__ == "__main__":
     with suppress(KeyboardInterrupt):
